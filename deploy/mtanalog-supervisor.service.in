@@ -1,0 +1,19 @@
+[Unit]
+Description=MIanalOG collector and backup supervisor
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart="@ROOT@/.venv/bin/python" -m mtanalog serve
+Restart=always
+RestartSec=5
+TimeoutStopSec=70
+KillMode=control-group
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

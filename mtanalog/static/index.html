@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e0b"><meta name="description" content="Личная карта ликвидности BTCUSDT Spot и потока исполнений.">
+  <title>MIanalog · Liquidity intelligence</title><link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+  <header class="header">
+    <a class="brand" href="/" aria-label="MIanalOG — главная"><span class="brand-mark" aria-hidden="true">m<span>i</span></span><span>MIanalOG<span class="brand-tag">LIQUIDITY INTELLIGENCE</span></span></a>
+    <div class="header-right"><span id="client-label" class="private-label">Мышь и клавиатура</span><span id="connection" class="status"><i></i><span>Подключение</span></span></div>
+  </header>
+
+  <main id="dashboard" class="dashboard">
+    <section class="market-heading">
+      <div><span class="eyebrow">BINANCE · SPOT</span><h1>BTC<span class="muted"> / USDT</span><span class="asset-badge" aria-hidden="true">B</span></h1><p class="subtitle">Карта ликвидности и поток исполнений</p></div>
+      <div class="quote"><span class="quote-label">Последняя цена</span><div id="last-price">—</div><span id="price-change" class="price-change">—</span><span class="quote-period">за доступный период</span></div>
+    </section>
+    <section class="workspace">
+      <div class="main-column">
+        <div class="toolbar glass">
+          <div class="segmented" role="group" aria-label="Период графика"><button class="active" data-period="1d" aria-pressed="true">1D<span>±5%</span></button><button data-period="1w" aria-pressed="false">1W<span>±10%</span></button></div>
+          <div class="toolbar-end"><span id="range-info" class="toolbar-info">Последние 24 часа</span><button id="zoom-out" class="button icon zoom-control" aria-label="Уменьшить масштаб">−</button><button id="zoom-in" class="button icon zoom-control" aria-label="Увеличить масштаб">+</button><button id="reset-view" class="button subtle" title="Сбросить масштаб">↺ <span>Сбросить</span></button><button id="refresh" class="button icon" aria-label="Обновить график" title="Обновить">⟳</button></div>
+        </div>
+        <section class="chart-card glass" aria-labelledby="heatmap-title">
+          <div class="panel-heading"><div><span class="panel-icon amber">≋</span><h2 id="heatmap-title">Ликвидность</h2><span class="panel-meta">Стакан ордеров</span></div><span class="panel-meta">Price · USDT</span></div>
+          <div class="chart-wrap heatmap-wrap"><canvas tabindex="0" id="heatmap" aria-label="Тепловая карта ликвидности BTCUSDT. Данные по наведению доступны также касанием."></canvas><div id="heatmap-tooltip" class="chart-tooltip" hidden></div><div id="loading" class="loading-overlay"><span class="loader"></span><span>Читаем рынок…</span></div></div>
+          <div class="chart-foot"><span><i class="dot blue"></i> Цена BTC</span><span><span class="dashed-sample"></span> Граница полной книги</span><span class="chart-hint">Удержание — объёмы · два пальца — масштаб · свайп — время · правая шкала — цена</span></div>
+        </section>
+        <section class="chart-card cvd-card glass" aria-labelledby="cvd-title">
+          <div class="panel-heading"><div><span class="panel-icon violet">⌁</span><h2 id="cvd-title">Поток исполнений</h2><span class="panel-meta">Cumulative Volume Delta</span></div><div class="segmented small" role="group" aria-label="Режим CVD"><button data-cvd="absolute" class="active" aria-pressed="true">USDT</button><button data-cvd="normalized" aria-pressed="false">Норм.</button></div></div>
+          <div class="chart-wrap cvd-wrap"><canvas tabindex="0" id="cvd" aria-label="CVD по размеру исполнения"></canvas><div id="cvd-tooltip" class="chart-tooltip" hidden></div></div>
+          <div id="cvd-legend" class="cvd-legend" role="group" aria-label="Видимые группы CVD"></div>
+        </section>
+        <div id="data-error" class="error" role="alert" hidden></div>
+        <div class="bottom-line"><span id="updated-at">—</span><span>Время на графике — UTC <span class="separator">·</span> обновление каждые 15 сек.</span></div>
+      </div>
+
+      <aside class="sidebar">
+        <section class="settings-card glass"><div class="settings-heading"><h2>Фильтр объёма</h2><span class="settings-icon">☷</span></div><p class="helper">Выделяй крупную ликвидность,<br>убирая фон со всей карты.</p>
+          <div class="segmented full" role="group" aria-label="Тип фильтра"><button data-filter="usdt" class="active" aria-pressed="true">USDT</button><button data-filter="percentile" aria-pressed="false">Перцентиль</button></div>
+          <div id="usdt-controls"><label class="control-label" for="volume-input">Минимальный объём <span>млн USDT</span></label><div class="number-field"><input id="volume-input" type="number" value="5" min="0" max="100" step="0.5" inputmode="decimal" aria-label="Минимальный объём в миллионах USDT"><span>M</span></div><input id="volume-slider" type="range" min="0" max="30" step="0.5" value="5" aria-label="Порог объёма"><div class="range-labels"><span>0M</span><span>30M</span></div></div>
+          <div id="percentile-controls" hidden><label class="control-label" for="percentile-low">Нижний перцентиль <output id="percentile-low-value">67%</output></label><input id="percentile-low" type="range" min="0" max="98" value="67"><label class="control-label" for="percentile-high">Верхний перцентиль <output id="percentile-high-value">99%</output></label><input id="percentile-high" type="range" min="1" max="100" value="99"><p class="helper small-text">По положительным объёмам ячеек текущей карты, после объединения уровней.</p></div>
+          <div class="scale-section"><div class="control-label">Шкала ликвидности <span>USDT</span></div><div class="color-scale"></div><div class="scale-labels"><strong id="scale-low">5M</strong><strong id="scale-high">—</strong></div><p id="filter-caption" class="helper small-text">Меньшие объёмы скрыты. Белый — верх шкалы и выше.</p></div>
+          <div class="price-setting">
+            <div class="setting-row"><label for="price-step">Ценовой шаг · USDT</label><input id="price-step" type="number" min="25" max="2000" step="25" value="200" placeholder="25–2000" title="От 25 до 2000 USDT, кратно 25" inputmode="numeric"></div>
+            <input id="price-step-slider" type="range" min="25" max="2000" step="25" value="200" aria-label="Ценовой шаг в USDT">
+            <div class="range-labels"><span>25 USDT</span><span>2000 USDT</span></div>
+          </div>
+          <div class="price-setting">
+            <div class="setting-row"><label for="price-margin">Диапазон цены · ±%</label><input id="price-margin" type="number" min="0.5" max="20" step="0.5" value="5" placeholder="0.5–20" title="От 0.5 до 20 процентов" inputmode="decimal"></div>
+            <input id="price-margin-slider" type="range" min="0.5" max="20" step="0.5" value="5" aria-label="Диапазон цены в процентах">
+            <div class="range-labels"><span>±0.5%</span><span>±20%</span></div>
+          </div>
+          <button id="apply-price" class="button price-apply">Применить</button><p id="price-settings-error" class="error" role="alert" hidden></p><p class="helper small-text">Шаг объединяет уровни ликвидности. Диапазон — отступ от минимума и максимума цены. Сейчас <strong id="price-range">±5%</strong>.</p>
+        </section>
+        <section class="info-card glass"><div class="info-heading"><i class="dot green"></i><h2>История наблюдений</h2></div><strong id="history-duration" class="history-number">—</strong><p id="history-note" class="helper">Накапливаем историю.</p><div class="progress-track"><div id="history-progress"></div></div><div class="setting-row"><span>Окно</span><strong id="history-target">24 часа</strong></div><p class="fine-print">Серые участки — пропуски данных. За пунктирными границами полнота дальней книги не гарантируется.</p></section>
+        <details id="controls-help" class="info-card glass controls-help">
+          <summary>Горячие клавиши и управление <span>+</span></summary>
+          <h3>С ПК</h3>
+          <ul>
+            <li>Наведи мышь — перекрестие, время, цена и объём.</li>
+            <li>Колесо над графиком — масштаб относительно курсора.</li>
+            <li>Зажми левую кнопку и двигай влево/вправо — перемещение по времени.</li>
+            <li>На правой ценовой шкале карты: зажми и двигай вверх — сузить диапазон, вниз — расширить. Колесо тоже меняет ценовой масштаб.</li>
+            <li>Горизонтальный жест трекпада или <kbd>Shift</kbd> + колесо — перемещение по времени.</li>
+            <li>Двойной клик или «Сбросить» — вернуть полное окно.</li>
+          </ul>
+          <p class="helper">После клика по графику:</p>
+          <ul>
+            <li><kbd>+</kbd> / <kbd>−</kbd> — приблизить / отдалить.</li>
+            <li><kbd>←</kbd> / <kbd>→</kbd> — переместить время.</li>
+            <li><kbd>0</kbd> или <kbd>Esc</kbd> — сбросить вид.</li>
+          </ul>
+          <h3>С телефона</h3>
+          <ul>
+            <li>Разведи или сведи два пальца — изменить масштаб.</li>
+            <li>Свайп одним пальцем влево/вправо — перемещение по времени.</li>
+            <li>Удерживай палец около полсекунды — перекрестие с объёмами и лупой. Двигай удерживаемый палец для выбора точки; график остаётся на месте.</li>
+            <li>Перекрестие смещено от пальца. После отпускания подсказка остаётся до следующего жеста.</li>
+            <li>Свайп по правой ценовой шкале карты: вверх — сузить диапазон, вниз — расширить.</li>
+            <li>Кнопка сброса ↺ — вернуть полное окно.</li>
+          </ul>
+          <p class="helper">Шаг: 25–2000 USDT, кратно 25. Диапазон: ±0.5–20%. Введи значения и нажми «Применить». Чтобы расширить карту за пределы загруженной области, увеличь настройку диапазона.</p>
+        </details>
+      </aside>
+    </section>
+  </main>
+  <footer><span>MIanalog <span class="muted">/ личный взгляд на рынок</span></span><span>BTCUSDT SPOT <span class="separator">·</span> BINANCE</span></footer>
+</body>
+</html>

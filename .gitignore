@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+output/
+*.egg-info/
+.env
+
+# Private deployment files retained for the existing installation.
+deploy/*.service
+deploy/Caddyfile.mianalog
+deploy/Caddyfile.review
+.env.*
+!.env.example
+*.pem
+*.key
+node_modules/

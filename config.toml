@@ -1,0 +1,12 @@
+symbol = "BTCUSDT"
+rest_url = "https://data-api.binance.vision"
+stream_url = "wss://data-stream.binance.vision/stream?streams=btcusdt@depth/btcusdt@aggTrade"
+data_dir = "data"
+retention_days = 14
+# Base price buckets retained in the minute summaries. Display buckets must be multiples.
+base_price_step = 25
+price_step = 200
+min_liquidity_usdt = 5000000
+checkpoint_seconds = 3600
+min_free_gib = 3
+web_port = 8790

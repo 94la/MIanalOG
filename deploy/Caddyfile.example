@@ -1,0 +1,6 @@
+# Replace charts.example.com with a DNS name pointing to your VPS.
+# Append this block to your existing Caddyfile; preserve other sites.
+charts.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8790
+}
