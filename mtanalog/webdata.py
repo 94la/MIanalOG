@@ -1,4 +1,7 @@
 """Read-only chart snapshots from the time-weighted minute archive."""
+from collections import OrderedDict
+import threading
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -8,8 +11,40 @@ import time
 import numpy as np
 
 from .storage import unpack
+from .market import snapshot
 
 PRESETS = {'1d': (1, 5), '1w': (7, 10)}
+
+
+_BIN_CACHE = OrderedDict()
+_BIN_BYTES = 0
+_BIN_LOCK = threading.Lock()
+_BIN_LIMIT = 32*1024*1024
+
+
+def grouped_bins(packed, low, rows, step):
+    """Cache compact chart aggregates, not much larger decoded order levels."""
+    global _BIN_BYTES
+    key = (hashlib.sha256(packed).digest(),low,rows,step)
+    with _BIN_LOCK:
+        cached = _BIN_CACHE.get(key)
+        if cached is not None:
+            _BIN_CACHE.move_to_end(key)
+            return cached
+    bins = np.asarray([[price,value] for _,price,value in unpack(packed)],dtype=np.float64).reshape(-1,2)
+    indices = (bins[:,0]//(step*100)-low//step).astype(np.int64)
+    inside = (indices>=0)&(indices<rows)
+    values = np.bincount(indices[inside],weights=bins[inside,1],minlength=rows)
+    values.flags.writeable = False
+    size = values.nbytes+256
+    with _BIN_LOCK:
+        if key not in _BIN_CACHE and size <= _BIN_LIMIT:
+            while _BIN_CACHE and _BIN_BYTES+size > _BIN_LIMIT:
+                _,old = _BIN_CACHE.popitem(last=False)
+                _BIN_BYTES -= old.nbytes+256
+            _BIN_CACHE[key] = values
+            _BIN_BYTES += size
+    return values
 
 
 def price_settings(config, mode, step=None, margin=None):
@@ -25,7 +60,7 @@ def price_settings(config, mode, step=None, margin=None):
     return step, round(margin*2)/2
 
 
-def chart_data(config, mode='1d', end_ms=None, price_step=None, margin_pct=None):
+def chart_data(config, mode='1d', end_ms=None, price_step=None, margin_pct=None, aligned=False):
     if mode not in PRESETS:
         raise ValueError('Unknown timeframe')
     days, _ = PRESETS[mode]
@@ -41,33 +76,39 @@ def chart_data(config, mode='1d', end_ms=None, price_step=None, margin_pct=None)
         if first is None:
             return {'empty': True, 'mode': mode, 'generated_ms': end}
         start = max(requested_start, first)
+        actual_end = end
+        column_ms = (120000 if mode=='1d' else 900000) if aligned else None
+        if aligned:
+            start = start//column_ms*column_ms
         prices = db.execute('SELECT minute,time,price FROM prices WHERE minute>=? AND minute<? ORDER BY minute',
-                            (start // 60000 * 60000, end)).fetchall()
+                            (start // 60000 * 60000, actual_end)).fetchall()
         if not prices:
             return {'empty': True, 'mode': mode, 'generated_ms': end}
-        low = math.floor(min(p for _, _, p in prices) * (1-margin/100) / step) * step
-        high = math.ceil(max(p for _, _, p in prices) * (1+margin/100) / step) * step
+        market = snapshot(config['data_dir'], start, actual_end)
+        candles = market['candles']
+        minimum = min((c['low'] for c in candles), default=min(p for _, _, p in prices))
+        maximum = max((c['high'] for c in candles), default=max(p for _, _, p in prices))
+        low = math.floor(minimum * (1-margin/100) / step) * step
+        high = math.ceil(maximum * (1+margin/100) / step) * step
         rows = int(round((high-low)/step))
-        columns = min(960, max(1, math.ceil((end-start)/60000)))
+        if aligned:
+            end = max(start+column_ms,math.ceil(actual_end/column_ms)*column_ms)
+        columns = int((end-start)//column_ms) if aligned else min(960, max(1, math.ceil((end-start)/60000)))
         if rows * columns > 2_000_000:
             raise ValueError('Chart matrix too large')
         edges = np.linspace(start, max(end, start+1), columns+1)
         amounts = np.zeros((columns, rows))
         durations = np.zeros(columns)
-        known = np.zeros((columns, 2))
+        known = np.column_stack((np.full(columns,-np.inf),np.full(columns,np.inf)))
         for minute, covered, lower, upper, packed, begin, finish in db.execute(
                 'SELECT minute,covered_ms,low,high,bins,first_ms,last_ms FROM liquidity '
                 'WHERE minute>=? AND minute<? ORDER BY minute', (start//60000*60000, end)):
             begin = begin if begin is not None else minute
             finish = finish if finish is not None else minute+covered
-            a, b = max(start, begin), min(end, finish)
+            a, b = max(start, begin), min(actual_end, finish)
             if b <= a:
                 continue
-            grouped = np.zeros(rows)
-            for _, price, value in unpack(packed):
-                row = (price // (step*100) * step-low) // step
-                if 0 <= row < rows:
-                    grouped[row] += value
+            grouped = grouped_bins(packed,low,rows,step)
             left = max(0, int(np.searchsorted(edges, a, side='right'))-1)
             right = min(columns-1, int(np.searchsorted(edges, b, side='left'))-1)
             for column in range(left, right+1):
@@ -75,10 +116,10 @@ def chart_data(config, mode='1d', end_ms=None, price_step=None, margin_pct=None)
                 weight *= min(1, covered/max(1, finish-begin))
                 amounts[column] += grouped*weight
                 durations[column] += weight
-                known[column] += np.array([lower, upper])*weight
+                known[column,0] = max(known[column,0],lower)
+                known[column,1] = min(known[column,1],upper)
         populated = durations > 0
         amounts[populated] /= durations[populated, None]
-        known[populated] /= durations[populated, None]
         # Sparse arrays retain ALL volumes; browser applies the requested filter.
         liquidity = [None if not populated[c] else
                      [[r, round(float(v), 2)] for r, v in enumerate(amounts[c]) if v > .01]
@@ -99,7 +140,8 @@ def chart_data(config, mode='1d', end_ms=None, price_step=None, margin_pct=None)
                     else [round(float(v), 2) for v in cvd[c]] for c in range(columns)]
         collector = json.loads(meta.get('collector', '{}'))
         last_price = prices[-1][2]
-        return {'empty': False, 'mode': mode, 'generated_ms': end,
+        return {**market, 'empty': False, 'mode': mode, 'generated_ms': actual_end,
+                'column_ms': column_ms, 'observed_ms': actual_end,
                 'requested_start_ms': requested_start, 'start_ms': start, 'end_ms': end,
                 'price_margin_pct': margin, 'low': low, 'high': high, 'price_step': step,
                 'rows': rows, 'columns': columns, 'liquidity': liquidity,

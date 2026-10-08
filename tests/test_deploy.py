@@ -17,6 +17,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('User=chartuser', text)
         self.assertIn('WorkingDirectory=/srv/chart %% instance', text)
         self.assertIn('ExecStart="/srv/chart %% instance/.venv/bin/python"', text)
+        self.assertNotIn('/home/research', text)
+        self.assertNotIn('193-23', text)
 
     def test_health_waits_for_delayed_listener(self):
         class Handler(BaseHTTPRequestHandler):

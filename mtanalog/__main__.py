@@ -23,6 +23,11 @@ def main():
     sub.add_parser('web')
     sub.add_parser('web-start')
     sub.add_parser('web-stop')
+    invitation = sub.add_parser('web-invite', help='Create a shared expiring link without printing credentials')
+    invitation.add_argument('--base-url', required=True)
+    invitation.add_argument('--hours', type=float, default=12)
+    invitation.add_argument('--output', required=True)
+    invitation.add_argument('--owner-output')
     for command in ('start', 'stop', 'serve'):
         sub.add_parser(command)
     args = parser.parse_args()
@@ -41,6 +46,15 @@ def main():
             handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
             logging.getLogger().handlers[:] = [handler]
         asyncio.run(collect(config, args.seconds))
+    elif args.command == 'web-invite':
+        from .access import invite
+        from datetime import datetime, timezone
+        try:
+            expires = invite(config, args.base_url, args.output, args.owner_output, args.hours)
+        except ValueError as error:
+            parser.error(str(error))
+        print('Guest link saved to:', args.output)
+        print('Expires UTC:', datetime.fromtimestamp(expires, timezone.utc).isoformat())
     elif args.command in ('web', 'web-start', 'web-stop'):
         from .web import run, start, stop
         if args.command == 'web':

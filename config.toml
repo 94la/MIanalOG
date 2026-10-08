@@ -10,3 +10,6 @@ min_liquidity_usdt = 5000000
 checkpoint_seconds = 3600
 min_free_gib = 3
 web_port = 8790
+
+# Public by default. Set true and generate invitations to restrict access.
+web_access_restricted = false

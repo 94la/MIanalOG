@@ -1,7 +1,8 @@
+// Keep archive cohort indexes stable; the third flag hides a group from the UI.
 export const SERIES = [
-  ['Все исполнения','#7eafd4'],['< $100','#8d9e95'],['$100–1k','#d1b079'],
-  ['$1k–10k','#93bd9c'],['$10k–100k','#d4938d'],['$100k–1M','#b2a1c9'],
-  ['$1M–10M','#b49e89'],['≥ $10M','#cbd1bb']
+  ['Все исполнения','#a4b0aa'],['< $100','#465e57',true],['$100–1k','#e6ac58'],
+  ['$1k–10k','#55c9c0'],['$10k–100k','#bbef1f'],['$100k–1M','#b99aff'],
+  ['$1M–10M','#ff0055'],['≥ $10M','#bbef1f',true]
 ];
 export const money = (value, digits=1) => {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -28,7 +29,8 @@ export function inspectionPoint(x,y,p,offset){
   return {x:Math.max(p.x,Math.min(p.x+p.w,x+offset.x)),y:Math.max(p.y,Math.min(p.y+p.h,y+offset.y))};
 }
 
-const stops=[[0,[14,9,11]],[.18,[111,8,9]],[.4,[240,31,13]],[.65,[255,142,0]],[.85,[255,227,57]],[1,[255,255,245]]];
+export const CHART_THEME={background:'#101914',bull:'#bbef1f',bear:'#ff0055',bullWick:'#d5fa77',bearWick:'#ff6296',outline:'#071410'};
+const stops=[[0,[57,73,75]],[.5,[126,146,149]],[1,[221,231,231]]];
 function heatColor(value){
   value=Math.max(0,Math.min(1,value));
   for(let i=1;i<stops.length;i++){
@@ -40,20 +42,35 @@ function heatColor(value){
   return stops.at(-1)[1];
 }
 
+export function aggregateCandles(candles, minutes=1){
+  const groups=new Map(),width=minutes*60;
+  for(const candle of candles){
+    const time=Math.floor(candle.time/width)*width,old=groups.get(time);
+    if(old){old.high=Math.max(old.high,candle.high);old.low=Math.min(old.low,candle.low);old.close=candle.close;}
+    else groups.set(time,{...candle,time});
+  }
+  return [...groups.values()];
+}
+
 export class Charts {
   constructor(heat,cvd,onScale){
     this.heat=heat;this.cvd=cvd;this.onScale=onScale;this.data=null;
     this.view=[0,1];this.priceView=[0,1];this.touches=new Map();this.filter={type:'usdt',minimum:5e6,lower:67,upper:99};
-    this.normalized=false;this.visible=SERIES.map((_,i)=>![1,7].includes(i));
+    this.normalized=false;this.visible=SERIES.map(([, ,hidden])=>!hidden);
     this.pointer=null;this.drag=null;this.left=16;this.right=68;
     this.observer=new ResizeObserver(()=>this.draw());this.observer.observe(heat);this.observer.observe(cvd);
     this.lenses=new Map();
     for(const canvas of [heat,cvd]){
       const lens=document.createElement('canvas');lens.className='chart-loupe';lens.hidden=true;lens.setAttribute('aria-hidden','true');
       canvas.parentElement.append(lens);this.lenses.set(canvas,lens);
+      canvas.addEventListener('contextrestored',()=>this.recoverCanvas());
       canvas.addEventListener('contextmenu',event=>event.preventDefault());
-      canvas.addEventListener('pointermove',event=>this.move(event,canvas));
-      canvas.addEventListener('pointerleave',()=>{if(!this.drag&&!this.inspection){this.pointer=null;this.draw();this.hideTips();}});
+      canvas.addEventListener('pointermove',event=>{
+        this.pendingMove={event,canvas};
+        if(this.moveFrame)return;
+        this.moveFrame=requestAnimationFrame(()=>{this.moveFrame=null;const move=this.pendingMove;this.pendingMove=null;if(move)this.move(move.event,move.canvas);});
+      });
+      canvas.addEventListener('pointerleave',()=>{if(!this.drag&&!this.inspection){this.pendingMove=null;this.pointer=null;this.draw();this.hideTips();}});
       canvas.addEventListener('pointerdown',event=>this.down(event,canvas));
       for(const type of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(type,event=>this.up(event,canvas));
       canvas.addEventListener('wheel',event=>{
@@ -66,8 +83,22 @@ export class Charts {
       canvas.addEventListener('dblclick',()=>this.reset());
     }
   }
-  setData(data,reset=false){this.data=data;if(reset){this.view=[0,1];this.priceView=[0,1];}this.buildImage();this.draw();}
-  setFilter(filter){this.filter=filter;this.buildImage();this.draw();}
+  setData(data,reset=false,update=null){this.data=data;this.volumeData=null;this.cvdCache=null;this.candleLookup=new Map((data.candles??[]).map(c=>[c.time,c]));if(reset){this.view=[0,1];this.priceView=[0,1];}if(data.empty){this.pointer=null;this.hideTips();this.surface(this.heat);this.surface(this.cvd);return;}this.buildImage(update);this.draw();}
+  setFilter(filter){if(JSON.stringify(filter)===JSON.stringify(this.filter))return;this.filter=filter;this.buildImage();this.draw();}
+  recoverCanvas(){
+    if(this.recoveryFrame)return;
+    this.recoveryFrame=requestAnimationFrame(()=>{this.recoveryFrame=null;this.resume();});
+  }
+  resume(){
+    this.cancelHold();cancelAnimationFrame(this.moveFrame);cancelAnimationFrame(this.candleFrame);
+    this.pendingMove=null;this.moveFrame=null;this.candleFrame=null;
+    for(const [id,point] of this.touches){try{if(point.canvas.hasPointerCapture(id))point.canvas.releasePointerCapture(id);}catch{}}
+    this.touches.clear();this.drag=null;this.inspection=false;this.pointer=null;this.hideTips();
+    this.heatLayer=null;this.cvdLayer=null;this.candleBitmap=null;this.candleSignature=null;this.candleDataSignature=null;this.engineSize=null;
+    if(this.engine){this.engine.remove();this.engine=null;this.candleSeries=null;}
+    this.engineHost?.remove();this.engineHost=null;
+    this.buildImage();this.draw();
+  }
   reset(){this.inspection=false;this.cancelHold();this.view=[0,1];this.priceView=[0,1];this.pointer=null;this.hideTips();this.draw();}
   anchor(){
     const box=this.heat.getBoundingClientRect();
@@ -112,6 +143,7 @@ export class Charts {
     }else this.drag.kind=canvas===this.heat&&first.x-box.left>=box.width-this.right?'price':'pan';
   }
   up(event,canvas){
+    if(this.pendingMove?.event.pointerId===event.pointerId){const move=this.pendingMove;this.pendingMove=null;this.move(move.event,move.canvas);}
     if(!this.touches.has(event.pointerId))return;
     this.cancelHold();this.touches.delete(event.pointerId);this.beginGesture(canvas);
     if(canvas.style)canvas.style.cursor='crosshair';
@@ -135,9 +167,11 @@ export class Charts {
     }
     this.pointer=null;this.hideTips();this.draw();return true;
   }
-  buildImage(){
+  buildImage(update=null){
     if(!this.data||this.data.empty)return;
-    const d=this.data,volumes=d.liquidity.flatMap(col=>col?col.map(pair=>pair[1]):[]).filter(v=>v>0).sort((a,b)=>a-b);
+    const d=this.data;
+    if(this.volumeData!==d){this.volumeData=d;this.volumes=d.liquidity.flatMap(col=>col?col.map(pair=>pair[1]):[]).filter(v=>v>0).sort((a,b)=>a-b);}
+    const volumes=this.volumes;
     let minimum=this.filter.type==='percentile'?percentile(volumes,this.filter.lower):this.filter.minimum;
     let maximum=this.filter.type==='percentile'?percentile(volumes,this.filter.upper):percentile(volumes.filter(v=>v>=minimum),99.5);
     if(this.filter.type==='usdt'){
@@ -145,18 +179,26 @@ export class Charts {
       const magnitude=10**Math.floor(Math.log10(maximum));maximum=Math.ceil(maximum/(magnitude/2))*magnitude/2;
     }
     if(maximum<=minimum)maximum=minimum+Math.max(1,minimum*.01);
+    const incremental=update?.type==='delta'&&this.image&&this.image.width===d.columns&&this.image.height===d.rows
+      &&this.imageLow===d.low&&this.imageStep===d.price_step&&this.minimum===minimum&&this.maximum===maximum;
     this.minimum=minimum;this.maximum=maximum;this.onScale(minimum,maximum);
-    this.image=document.createElement('canvas');this.image.width=d.columns;this.image.height=d.rows;
-    const ctx=this.image.getContext('2d'),pixels=ctx.createImageData(d.columns,d.rows);
-    for(let c=0;c<d.columns;c++){
-      const col=d.liquidity[c],values=new Map(col??[]);
-      for(let row=0;row<d.rows;row++){
-        const value=values.get(row)??0,color=col===null?[49,59,54]:value<minimum||value===0?[9,16,13]:heatColor((value-minimum)/(maximum-minimum));
-        const offset=((d.rows-1-row)*d.columns+c)*4;
-        pixels.data.set([...color,255],offset);
-      }
+    if(!incremental){this.image=document.createElement('canvas');this.image.width=d.columns;this.image.height=d.rows;const image=this.image;image.addEventListener('contextrestored',()=>{if(this.image===image)this.recoverCanvas();});}
+    const ctx=this.image.getContext('2d');
+    if(incremental&&update.drop){
+      const copy=document.createElement('canvas');copy.width=d.columns;copy.height=d.rows;copy.getContext('2d').drawImage(this.image,0,0);
+      ctx.clearRect(0,0,d.columns,d.rows);ctx.drawImage(copy,update.drop,0,d.columns-update.drop,d.rows,0,0,d.columns-update.drop,d.rows);
     }
-    ctx.putImageData(pixels,0,0);
+    const columns=incremental?update.patch.liquidity.map(([index])=>index):Array.from({length:d.columns},(_,index)=>index);
+    for(const c of columns){
+      const col=d.liquidity[c],values=new Map(col??[]),pixels=ctx.createImageData(1,d.rows);
+      for(let row=0;row<d.rows;row++){
+        const value=values.get(row)??0,color=col===null?[49,59,54]:value<minimum||value===0?[16,25,20]:heatColor((value-minimum)/(maximum-minimum));
+        const offset=(d.rows-1-row)*4;
+        pixels.data[offset]=color[0];pixels.data[offset+1]=color[1];pixels.data[offset+2]=color[2];pixels.data[offset+3]=255;
+      }
+      ctx.putImageData(pixels,c,0);
+    }
+    this.imageLow=d.low;this.imageStep=d.price_step;this.imageVersion=(this.imageVersion??0)+1;
   }
   surface(canvas){
     const box=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;
@@ -165,7 +207,7 @@ export class Charts {
     }
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,box.width,box.height);
     const plot={x:this.left,y:8,w:box.width-this.left-this.right,h:box.height-43};
-    ctx.font='11px Manrope, sans-serif';
+    ctx.font='11px Montserrat, sans-serif';
     return {ctx,plot,box};
   }
   timeBounds(){const d=this.data;return this.view.map(v=>d.start_ms+v*(d.end_ms-d.start_ms));}
@@ -175,7 +217,7 @@ export class Charts {
     this.drawHeat();this.drawCvd();this.drawLoupe();
   }
   grid(ctx,p,low,high,normalized=false){
-    ctx.lineWidth=1;ctx.textAlign='left';ctx.fillStyle='#a2b4a8';
+    ctx.lineWidth=1;ctx.textAlign='left';ctx.fillStyle='#b3c1b9';
     for(let i=0;i<=5;i++){
       const y=p.y+p.h*i/5,value=high-(high-low)*i/5;
       ctx.strokeStyle='#a5bca51b';ctx.beginPath();ctx.moveTo(p.x,y);ctx.lineTo(p.x+p.w,y);ctx.stroke();
@@ -186,15 +228,29 @@ export class Charts {
     for(let i=0;i<=count;i++){
       const x=p.x+p.w*i/count,time=a+(b-a)*i/count,date=new Date(time);
       ctx.strokeStyle='#a5bca510';ctx.beginPath();ctx.moveTo(x,p.y);ctx.lineTo(x,p.y+p.h);ctx.stroke();
-      ctx.fillStyle='#a2b4a8';
+      ctx.fillStyle='#b3c1b9';
       ctx.fillText(date.toISOString().slice(11,16),x,p.y+p.h+17);
-      ctx.font='9px Manrope, sans-serif';ctx.fillText(date.toISOString().slice(5,10),x,p.y+p.h+29);ctx.font='11px Manrope, sans-serif';
+      ctx.font='9px Montserrat, sans-serif';ctx.fillText(date.toISOString().slice(5,10),x,p.y+p.h+29);ctx.font='11px Montserrat, sans-serif';
     }
   }
   clip(ctx,p){ctx.save();ctx.beginPath();ctx.rect(p.x,p.y,p.w,p.h);ctx.clip();}
+  cachedLayer(name,key,ctx,box){
+    const layer=this[name];
+    if(!layer||layer.key!==key)return false;
+    if(!layer.canvas.width||!layer.canvas.height)return false;ctx.drawImage(layer.canvas,0,0,box.width,box.height);return true;
+  }
+  saveLayer(name,key,source){
+    if(!this[name]){const canvas=document.createElement('canvas');canvas.addEventListener('contextrestored',()=>this.recoverCanvas());this[name]={canvas};}
+    const layer=this[name];
+    if(layer.canvas.width!==source.width||layer.canvas.height!==source.height){layer.canvas.width=source.width;layer.canvas.height=source.height;}
+    const ctx=layer.canvas.getContext('2d');ctx.clearRect(0,0,source.width,source.height);ctx.drawImage(source,0,0);layer.key=key;
+  }
   drawHeat(){
-    const {ctx,plot:p}=this.surface(this.heat),d=this.data,[low,high]=this.priceBounds();
-    ctx.fillStyle='#09100d';ctx.fillRect(p.x,p.y,p.w,p.h);
+    const size=this.heat.getBoundingClientRect();if(!this.data||this.data.empty||size.width<=this.left+this.right||size.height<=43)return;
+    const {ctx,plot:p,box}=this.surface(this.heat),d=this.data,[low,high]=this.priceBounds();
+    const key=[d.generated_ms,this.imageVersion,...this.view,...this.priceView,box.width,box.height,window.devicePixelRatio,this.candleBitmapVersion??0].join(':');
+    if(this.cachedLayer('heatLayer',key,ctx,box)){this.clip(ctx,p);this.drawCrosshair(ctx,p,this.heat);ctx.restore();return;}
+    ctx.fillStyle=CHART_THEME.background;ctx.fillRect(p.x,p.y,p.w,p.h);
     ctx.imageSmoothingEnabled=false;
     ctx.drawImage(this.image,this.view[0]*d.columns,(1-this.priceView[1])*d.rows,(this.view[1]-this.view[0])*d.columns,(this.priceView[1]-this.priceView[0])*d.rows,p.x,p.y,p.w,p.h);
     this.grid(ctx,p,low,high);
@@ -212,14 +268,50 @@ export class Charts {
         if(previous)ctx.lineTo(x,y(bounds[side]));else ctx.moveTo(x,y(bounds[side]));previous=true;
       });ctx.stroke();ctx.setLineDash([]);
     }
-    ctx.strokeStyle='#7eafd4';ctx.lineWidth=1.5;ctx.beginPath();let last=null;
-    for(const [t,price] of d.prices){
-      if(last===null||t-last>180000)ctx.moveTo(this.x(t,p),y(price));else ctx.lineTo(this.x(t,p),y(price));last=t;
-    }ctx.stroke();
+    this.drawCandles(ctx,p);
+    this.saveLayer('heatLayer',key,this.heat);
     this.drawCrosshair(ctx,p,this.heat);
     ctx.restore();
   }
+  drawCandles(ctx,p){
+    if(!window.LightweightCharts||!this.data.candles?.length)return;
+    if(!this.engine){
+      const host=document.createElement('div');host.className='candle-engine';this.engineHost=host;this.heat.parentElement.append(host);
+      const L=window.LightweightCharts;
+      this.engine=L.createChart(host,{width:Math.max(1,Math.round(p.w)),height:Math.max(1,Math.round(p.h)),
+        layout:{background:{type:'solid',color:'transparent'},textColor:'#b3c1b9',attributionLogo:false},
+        grid:{vertLines:{visible:false},horzLines:{visible:false}},
+        rightPriceScale:{visible:false,scaleMargins:{top:0,bottom:0}},leftPriceScale:{visible:false},
+        timeScale:{visible:false,minBarSpacing:.001,fixLeftEdge:false,fixRightEdge:false},
+        handleScroll:false,handleScale:false,crosshair:{vertLine:{visible:false},horzLine:{visible:false}}});
+      this.candleSeries=this.engine.addSeries(L.CandlestickSeries,{upColor:CHART_THEME.bull,downColor:CHART_THEME.bear,borderVisible:false,wickUpColor:CHART_THEME.bullWick,wickDownColor:CHART_THEME.bearWick,priceLineVisible:false,lastValueVisible:false,
+        autoscaleInfoProvider:()=>({priceRange:{minValue:this.priceBounds()[0],maxValue:this.priceBounds()[1]}})});
+    }
+    const [a,b]=this.timeBounds(),minutes=(b-a)/60000;
+    const interval=minutes/p.w>12?60:minutes/p.w>3?15:minutes/p.w>.8?5:1;
+    const signature=[this.data.generated_ms,interval,...this.view,...this.priceView,p.w,p.h].join(':');
+    if(signature!==this.candleSignature){
+      this.candleSignature=signature;
+      const step=interval*60;
+      const first=Math.floor(this.data.start_ms/1000/step)*step,last=Math.floor(this.data.end_ms/1000/step)*step;
+      const dataSignature=[this.data.generated_ms,interval].join(':');
+      if(this.candleDataSignature!==dataSignature){
+        this.candleDataSignature=dataSignature;
+        const candles=aggregateCandles(this.data.candles,interval),values=new Map(candles.map(c=>[c.time,c])),series=[];
+        for(let time=first;time<=last;time+=step)series.push(values.get(time)??{time});
+        this.candleSeries.setData(series);
+      }
+      const size=[Math.max(1,Math.round(p.w)),Math.max(1,Math.round(p.h))];
+      if(size.join(':')!==this.engineSize){this.engineSize=size.join(':');this.engine.resize(...size);}
+      this.engine.timeScale().setVisibleLogicalRange({from:(a/1000-first)/step-.5,to:(b/1000-first)/step-.5});
+      this.engine.priceScale('right').applyOptions({autoScale:true,scaleMargins:{top:0,bottom:0}});
+      cancelAnimationFrame(this.candleFrame);
+      this.candleFrame=requestAnimationFrame(()=>{this.candleFrame=null;const bitmap=this.engine.takeScreenshot();if(!bitmap.width||!bitmap.height)return;const outlined=document.createElement('canvas');outlined.width=bitmap.width;outlined.height=bitmap.height;const outline=outlined.getContext('2d');outline.shadowColor=CHART_THEME.outline;outline.shadowBlur=3*(window.devicePixelRatio||1);outline.drawImage(bitmap,0,0);this.candleBitmap=outlined;this.candleBitmapVersion=(this.candleBitmapVersion??0)+1;this.drawHeat();this.drawLoupe();});
+    }
+    if(this.candleBitmap?.width&&this.candleBitmap?.height)ctx.drawImage(this.candleBitmap,p.x,p.y,p.w,p.h);
+  }
   cvdValues(){
+    if(this.cvdCache?.data===this.data&&this.cvdCache.normalized===this.normalized)return this.cvdCache.rows;
     const rows=this.data.cvd.map(row=>row?[...row]:null);
     if(this.normalized){
       SERIES.forEach((_,i)=>{
@@ -229,10 +321,15 @@ export class Charts {
         for(const row of rows)if(row)row[i]=max>min?(row[i]-min)/(max-min):.5;
       });
     }
+    this.cvdCache={data:this.data,normalized:this.normalized,rows};
     return rows;
   }
   drawCvd(){
-    const {ctx,plot:p}=this.surface(this.cvd),d=this.data,rows=this.cvdValues();
+    const size=this.cvd.getBoundingClientRect();if(!this.data||this.data.empty||size.width<=this.left+this.right||size.height<=43)return;
+    const {ctx,plot:p,box}=this.surface(this.cvd),d=this.data;
+    const key=[d.generated_ms,...this.view,this.normalized,this.visible.join(','),box.width,box.height,window.devicePixelRatio].join(':');
+    if(this.cachedLayer('cvdLayer',key,ctx,box)){this.clip(ctx,p);this.drawCrosshair(ctx,p,this.cvd);ctx.restore();return;}
+    const rows=this.cvdValues();
     let low=0,high=1;
     if(!this.normalized){
       const vals=rows.filter(Boolean).flatMap(row=>row.filter((_,i)=>this.visible[i]));
@@ -241,14 +338,15 @@ export class Charts {
     this.grid(ctx,p,low,high,this.normalized);this.clip(ctx,p);
     SERIES.forEach(([,color],i)=>{
       if(!this.visible[i])return;
-      ctx.strokeStyle=color;ctx.lineWidth=i===0?1.7:1.2;ctx.beginPath();let previous=false;
+      ctx.strokeStyle=color;ctx.lineWidth=i===0?1.4:1.3;ctx.setLineDash(i===0?[5,4]:[]);ctx.beginPath();let previous=false;
       rows.forEach((row,c)=>{
         if(!row){previous=false;return;}
         const x=this.x(d.start_ms+(c+.5)*(d.end_ms-d.start_ms)/d.columns,p),y=p.y+(high-row[i])/(high-low)*p.h;
         if(previous)ctx.lineTo(x,y);else ctx.moveTo(x,y);previous=true;
-      });ctx.stroke();
+      });ctx.stroke();ctx.setLineDash([]);
     });
     for(const [kind,begin,end] of d.gaps){if(kind==='cvd'){ctx.fillStyle='#94a49a4c';ctx.fillRect(this.x(begin,p),p.y,this.x(end??d.end_ms,p)-this.x(begin,p),p.h);}}
+    this.saveLayer('cvdLayer',key,this.cvd);
     this.drawCrosshair(ctx,p,this.cvd);
     ctx.restore();
   }
@@ -265,10 +363,10 @@ export class Charts {
       const show=this.pointer?.touch&&this.pointer.canvas===canvas;
       lens.hidden=!show;if(!show)continue;
       const {x,y}=this.pointer,ratio=window.devicePixelRatio||1,size=88,zoom=2.5;
-      lens.width=Math.round(size*ratio);lens.height=Math.round(size*ratio);
+      if(lens.width!==Math.round(size*ratio)){lens.width=Math.round(size*ratio);lens.height=Math.round(size*ratio);}
       lens.style.left=(x-size/2)+'px';lens.style.top=(y-size/2)+'px';
       const ctx=lens.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);
-      ctx.fillStyle='#09100d';ctx.fillRect(0,0,size,size);ctx.imageSmoothingEnabled=false;
+      ctx.fillStyle=CHART_THEME.background;ctx.fillRect(0,0,size,size);ctx.imageSmoothingEnabled=false;
       const sourceSize=size/zoom;
       ctx.drawImage(canvas,(x-sourceSize/2)*ratio,(y-sourceSize/2)*ratio,sourceSize*ratio,sourceSize*ratio,0,0,size,size);
       ctx.strokeStyle='#e3eee2';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(size/2,8);ctx.lineTo(size/2,size-8);ctx.moveTo(8,size/2);ctx.lineTo(size-8,size/2);ctx.stroke();
@@ -297,6 +395,8 @@ export class Charts {
       const missing=d.liquidity[col]===null||d.gaps.some(([kind,a,b])=>kind==='depth'&&time>=a&&time<(b??d.end_ms));
       add('Цена',`${(d.low+row*d.price_step).toLocaleString('en-US')}–${(d.low+(row+1)*d.price_step).toLocaleString('en-US')}`);
       add('Объём',missing?'Нет данных':money(volume,2)+' USDT');
+      const candle=this.candleLookup?.get(Math.floor(time/60000)*60);
+      if(candle){add('O / C',`${candle.open.toFixed(2)} / ${candle.close.toFixed(2)}`);add('H / L',`${candle.high.toFixed(2)} / ${candle.low.toFixed(2)}`);}
       if(!missing&&volume<this.minimum)add('Фильтр','Ниже порога');
       if(d.known[col]&&(price<d.known[col][0]||price>d.known[col][1]))add('Книга','Частично наблюдаемая');
     }else{

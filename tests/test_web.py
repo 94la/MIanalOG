@@ -3,6 +3,7 @@ import json
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import urllib.request
@@ -87,11 +88,29 @@ class WebDataTests(unittest.TestCase):
             self.assertIn([row, 6.4e6], data['liquidity'][0])
             self.assertEqual(data['columns'], 960)
 
+    def test_known_band_is_intersection_and_bin_cache_is_invalidated(self):
+        from mtanalog.webdata import grouped_bins
+        from mtanalog.storage import pack
+        original=pack([['b',8400000,100]])
+        self.assertIs(grouped_bins(original,84000,4,200),grouped_bins(original,84000,4,200))
+        self.assertFalse(grouped_bins(original,84000,4,200).flags.writeable)
+        changed=pack([['b',8400000,200]])
+        self.assertEqual(grouped_bins(changed,84000,4,200)[0],200)
+        with tempfile.TemporaryDirectory() as root:
+            minute=fixture(root);store=Store(root)
+            store.save_minute(minute+60000,[['b',8400000,8e6]],60000,83600,84400)
+            store.close()
+            data=chart_data({'data_dir':root,'price_step':200,'min_liquidity_usdt':5e6},'1w',end_ms=minute+1200*60000)
+            self.assertEqual(data['known'][0],[83600,84400])
+
 
 class HTTPTests(unittest.TestCase):
     def test_public_api_static_allowlist_and_removed_auth(self):
         with tempfile.TemporaryDirectory() as root:
-            fixture(root)
+            minute = fixture(root)
+            clock = patch("mtanalog.webdata.time.time", return_value=(minute+180000)/1000)
+            clock.start()
+            self.addCleanup(clock.stop)
             config = {'data_dir': root, 'price_step': 200, 'min_liquidity_usdt': 5e6}
             service = ChartService(config)
             server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(service))
@@ -105,7 +124,7 @@ class HTTPTests(unittest.TestCase):
                     self.assertNotIn(b'id="login"', html)
                     self.assertNotIn(b'id="logout"', html)
                     self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
-                with urllib.request.urlopen(url+'/manrope.ttf') as response:
+                with urllib.request.urlopen(url+'/montserrat.ttf') as response:
                     self.assertEqual(response.headers['Content-Type'], 'font/ttf')
                     self.assertGreater(len(response.read()), 10000)
                 for path in ('/data/telegram-secret.json', '/../../config.toml'):

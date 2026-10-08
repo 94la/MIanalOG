@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
+try{
+ const page=await browser.newPage({viewport:{width:430,height:932},isMobile:true,hasTouch:true});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(process.env.MTANALOG_BROWSER_URL||'http://127.0.0.1:8791');
+ await page.locator('#loading').waitFor({state:'hidden'});
+ const result=await page.evaluate(async()=>{
+  const {Charts,CHART_THEME}=await import('/chart.js');
+  const original=Charts.prototype.drawHeat;
+  Charts.prototype.drawHeat=function(...args){window.resumeChart=this;return original.apply(this,args);};
+  document.querySelector('#heatmap').dispatchEvent(new PointerEvent('pointermove',{clientX:150,clientY:250,pointerType:'mouse'}));
+  await new Promise(r=>setTimeout(r,200));
+  Charts.prototype.drawHeat=original;
+  const c=window.resumeChart;if(!c)throw Error('Chart instance not captured');
+  c.view=[.2,.8];c.priceView=[.1,.9];c.draw();
+  const data=c.data,view=[...c.view],priceView=[...c.priceView];
+  const pixels=()=>Array.from(c.image.getContext('2d').getImageData(0,0,c.image.width,c.image.height).data);
+  const before=pixels();
+  c.image.getContext('2d').clearRect(0,0,c.image.width,c.image.height);
+  c.heatLayer?.canvas.getContext('2d').clearRect(0,0,c.heatLayer.canvas.width,c.heatLayer.canvas.height);
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+  document.dispatchEvent(new Event('visibilitychange'));
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});
+  document.dispatchEvent(new Event('visibilitychange'));
+  delete document.hidden;
+  const recovered=JSON.stringify(before)===JSON.stringify(pixels());
+  const retained=c.data===data;
+  c.resume();c.resume();
+  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+  return {recovered,retained,view:c.view,priceView:c.priceView,expectedView:view,expectedPrice:priceView,hosts:document.querySelectorAll('.candle-engine').length,theme:CHART_THEME};
+ });
+ assert.equal(result.recovered,true);assert.equal(result.retained,true);
+ assert.deepEqual(result.view,result.expectedView);assert.deepEqual(result.priceView,result.expectedPrice);
+ assert.equal(result.hosts,1);assert.equal(result.theme.bear,'#ff0055');assert.deepEqual(errors,[]);
+  const responsePromise=page.waitForResponse(r=>r.url().includes('/api/chart?')&&!new URL(r.url()).searchParams.has('since'));
+ await page.evaluate(()=>{
+  const now=Date.now;
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+  document.dispatchEvent(new Event('visibilitychange'));
+  Date.now=()=>now()+120000;
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});
+  document.dispatchEvent(new Event('visibilitychange'));
+  Date.now=now;delete document.hidden;
+ });
+ const response=await responsePromise;assert.equal(response.status(),200);
+ const snapshot=await response.json();assert.ok(snapshot.columns>100,'Full history must return after a long pause');
+ await page.screenshot({path:'output/web_resume_mobile.png',fullPage:true});
+ console.log('Resume checks passed: discarded canvas restored, history and zoom retained, one candle engine, no browser errors.');
+}finally{await browser.close();}

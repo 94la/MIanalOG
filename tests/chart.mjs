@@ -49,3 +49,8 @@ console.log('Inspection checks passed: offset bounds and both crosshair axes.');
 
 chart.pointer=null;chart.view=[.25,.75];chart.pan(.2);near(chart.view[0],.35);near(chart.view[1],.85);chart.pan(5);assert.deepEqual(chart.view,[.5,1]);chart.pan(-5);assert.deepEqual(chart.view,[0,.5]);
 console.log('Desktop pan checks passed: time moves and remains inside the archive.');
+
+const {aggregateCandles}=await import('../mtanalog/static/chart.js');
+const combined=aggregateCandles([{time:0,open:100,high:110,low:80,close:105},{time:60,open:105,high:120,low:100,close:115}],5);
+assert.equal(combined.length,1);assert.equal(combined[0].low,80);assert.equal(combined[0].high,120);assert.equal(combined[0].close,115);
+console.log('Candle aggregation preserves intraminute extremes.');

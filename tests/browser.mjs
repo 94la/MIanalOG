@@ -1,21 +1,61 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fixture={base:process.env.MTANALOG_BROWSER_URL||'http://127.0.0.1:8790'};
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
+if(process.env.MTANALOG_BROWSER_LINK_FILE){
+  const link=new URL(readFileSync(process.env.MTANALOG_BROWSER_LINK_FILE,'utf8').trim());
+  const token=new URLSearchParams(link.hash.slice(1)).get('access');
+  const create=browser.newContext.bind(browser);
+  browser.newContext=async options=>{
+    const context=await create(options);
+    await context.addCookies([{name:'__Host-mianalog-access',value:token,url:fixture.base,secure:true,httpOnly:true,sameSite:'Lax'}]);
+    return context;
+  };
+}
 const errors=[];
 try{
   const context=await browser.newContext({viewport:{width:1440,height:1150},deviceScaleFactor:1});
   const page=await context.newPage();
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto(fixture.base);
-  assert.equal((await page.request.get(fixture.base+'/api/chart')).status(),200);
   assert.equal(await page.locator('#login, #logout').count(),0);
   await page.locator('#dashboard').waitFor({state:'visible'});
   await page.locator('#loading').waitFor({state:'hidden'});
+  assert.equal((await page.request.get(fixture.base+'/api/chart')).status(),200);
+
   assert.equal(new URL(page.url()).hash,'');
   assert.notEqual(await page.locator('#last-price').innerText(),'—');
+  await page.evaluate(async()=>{await document.fonts.ready;for(let i=0;i<4;i++)await new Promise(requestAnimationFrame);});
+  // A moving crosshair must reuse the rendered candle image.
+  const hoverWork=await page.evaluate(async()=>{
+    const {Charts}=await import('/chart.js'),original=Charts.prototype.drawCandles;let rebuilds=0;
+    Charts.prototype.drawCandles=function(...args){rebuilds++;return original.apply(this,args);};
+    const canvas=document.querySelector('#heatmap'),r=canvas.getBoundingClientRect();
+    for(let i=0;i<8;i++){canvas.dispatchEvent(new PointerEvent('pointermove',{clientX:r.left+80+i*12,clientY:r.top+100,pointerType:'mouse'}));await new Promise(requestAnimationFrame);}
+    Charts.prototype.drawCandles=original;return rebuilds;
+  });
+  assert.equal(hoverWork,0,'Pointer movement should reuse the candle layer');
   await page.evaluate(()=>document.fonts.ready);
-  assert.ok(await page.evaluate(()=>document.fonts.check('14px Manrope')),'Local Manrope font must load');
+  assert.ok(await page.evaluate(()=>document.fonts.check('14px Montserrat')),'Local Montserrat font must load');
+  assert.equal(await page.locator('#connection').evaluate(el=>el.closest('.panel-heading').querySelector('#heatmap-title')!==null),true,'Collector status belongs in liquidity heading');
+  const clockCheck=await page.evaluate(async()=>{
+    const original=Date.now,wasLive=document.querySelector('#connection').textContent.includes('Live');
+    Date.now=()=>original()+300000;
+    try{await new Promise(resolve=>setTimeout(resolve,5500));return !wasLive||!document.querySelector('#connection').textContent.includes('неактивен');}
+    finally{Date.now=original;}
+  });
+  assert.equal(clockCheck,true,'Phone wall-clock skew must not mark a live collector inactive');
+  assert.match(await page.locator('#utc-clock').innerText(),/^\d{2}:\d{2}:\d{2} UTC$/);
+  assert.equal(await page.locator('.flow-card .panel-icon').count(),1);
+  assert.match(await page.title(),/^FireCharts/);
+  assert.match(await page.locator('.brand').innerText(),/FireCharts/);
+  const changeColors=await page.locator('#price-change').evaluate(el=>{
+    const negative=el.classList.contains('negative');el.classList.remove('negative');
+    const positive=getComputedStyle(el).color;el.classList.add('negative');const minus=getComputedStyle(el).color;
+    el.classList.toggle('negative',negative);return {positive,minus};
+  });
+  assert.deepEqual(changeColors,{positive:'rgb(187, 239, 31)',minus:'rgb(255, 0, 85)'});
   assert.equal(await page.locator('html').getAttribute('data-client'),'desktop');
   assert.match(await page.locator('.chart-hint').innerText(),/Колесо/);
   for(const [width,height] of [[1366,768],[1920,1080],[2560,1440],[900,800]]){
@@ -25,6 +65,8 @@ try{
     const main=await page.locator('.main-column').boundingBox(),side=await page.locator('.sidebar').boundingBox();
     if(width>=1024)assert.ok(side.x>=main.x+main.width,'Desktop settings must sit beside charts');
     else assert.ok(side.y>main.y,'Narrow desktop must stack without becoming a phone');
+    const history=await page.locator('.sidebar-secondary .info-card').first().boundingBox(),help=await page.locator('#controls-help').boundingBox();
+    assert.ok(help.y>=history.y+history.height&&help.y-history.y-history.height<24,'Help must follow history without a stretched gap');
     assert.equal(await page.locator('html').getAttribute('data-client'),'desktop');
   }
   await page.setViewportSize({width:1440,height:1150});
@@ -44,9 +86,13 @@ try{
   await page.locator('#percentile-low').dispatchEvent('input');
   assert.equal(await page.locator('#percentile-low-value').innerText(),'85%');
   await page.locator('[data-cvd="normalized"]').click();
+  assert.equal(await page.locator('#cvd-legend button').count(),6);
+  assert.doesNotMatch(await page.locator('#cvd-legend').innerText(),/< \$100|≥ \$10M/);
+  assert.equal(await page.locator('#cvd-legend .series-total').count(),1);
   const legend=page.locator('#cvd-legend button').first();
   await legend.click();assert.equal(await legend.getAttribute('aria-pressed'),'false');
   await legend.click();
+  await page.locator('#heatmap').scrollIntoViewIfNeeded();
   const heat=await page.locator('#heatmap').boundingBox();
   await page.mouse.move(heat.x+heat.width*.5,heat.y+heat.height*.4);
   await page.locator('#heatmap-tooltip').waitFor({state:'visible'});
@@ -55,6 +101,7 @@ try{
   await page.locator('#reset-view').click();
   await page.locator('[data-filter="usdt"]').click();
   await page.locator('#volume-input').fill('8');
+  await page.waitForFunction(()=>document.querySelector('#scale-low').textContent==='8.00M');
   assert.match(await page.locator('#scale-low').innerText(),/8/);
   await page.locator('[data-period="1d"]').click();
   await page.waitForFunction(()=>document.querySelector('#price-range').textContent==='±5%');
@@ -104,7 +151,7 @@ try{
   await page.locator('#price-step').fill('200');await page.locator('#price-margin').fill('5');
   await page.locator('#apply-price').click();
   await page.waitForFunction(()=>document.querySelector('#price-range').textContent==='±5%');
-  assert.equal((await context.cookies()).length,0);
+  assert.equal((await context.cookies()).length,process.env.MTANALOG_BROWSER_LINK_FILE?1:0);
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'output/web_mobile.png',fullPage:true});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile horizontal overflow');

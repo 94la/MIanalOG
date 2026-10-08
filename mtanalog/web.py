@@ -1,12 +1,14 @@
 """Loopback-only read-only chart service, intended behind the existing Caddy."""
 import fcntl
 import gzip
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import signal
+import secrets
 import os
 import subprocess
 import sys
@@ -16,6 +18,9 @@ from urllib.parse import urlsplit, parse_qs
 
 from .webdata import chart_data, price_settings
 from .storage import Store
+from .access import COOKIE, permission
+from .market import start_worker
+from .updates import delta
 
 LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent/'static'
@@ -99,6 +104,9 @@ class ChartService:
         self.compute = threading.Lock()
         self.computations = []
         self.cache_bytes = 0
+        self.history = {}
+        self.history_bytes = 0
+        self.patches = {}
 
     def dataset(self, mode, step=None, margin=None):
         step, margin = price_settings(self.config, mode, step, margin)
@@ -122,7 +130,8 @@ class ChartService:
             if len(self.computations) >= 30:
                 raise ServiceBusy()
             self.computations.append(now)
-            value = chart_data(self.config, mode, price_step=step, margin_pct=margin)
+            value = chart_data(self.config, mode, price_step=step, margin_pct=margin, aligned=True)
+            value['revision'] = secrets.token_hex(12)
             body = json.dumps(value, separators=(',', ':'), allow_nan=False).encode()
             if len(body) > 32*1024*1024:
                 raise ValueError('Chart response too large')
@@ -135,9 +144,37 @@ class ChartService:
                     self.cache_bytes -= len(previous[1])
                 self.cache[key] = (time.monotonic(), body)
                 self.cache_bytes += len(body)
+                while self.history and (len(self.history)>=24 or self.history_bytes+len(body)>32*1024*1024):
+                    expired=self.history.pop(next(iter(self.history)))
+                    self.history_bytes-=len(expired)
+                if len(body)<=32*1024*1024:
+                    self.history[value['revision']]=body
+                    self.history_bytes+=len(body)
             return body
         finally:
             self.compute.release()
+
+    def update(self, mode, step=None, margin=None, since=None):
+        body=self.dataset(mode,step,margin)
+        if not since: return body
+        current=json.loads(body)
+        if current['revision']==since:
+            return json.dumps({'type':'unchanged','revision':since}).encode()
+        key=(since,current['revision'])
+        with self.lock:
+            cached=self.patches.get(key)
+            previous=self.history.get(since)
+        if cached is not None: return cached
+        if previous is None: return body
+        patch=delta(json.loads(previous),current)
+        if patch is None: return body
+        encoded=json.dumps(patch,separators=(',',':'),allow_nan=False).encode()
+        if len(encoded)>=len(body): return body
+        with self.lock:
+            while self.patches and (len(self.patches)>=16 or sum(map(len,self.patches.values()))+len(encoded)>8*1024*1024):
+                self.patches.pop(next(iter(self.patches)))
+            if len(encoded)<=8*1024*1024: self.patches[key]=encoded
+        return encoded
 
     def readiness(self):
         try:
@@ -175,6 +212,8 @@ def handler_for(service):
                              "default-src 'self'; script-src 'self'; style-src 'self'; "
                              "img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
                              "base-uri 'none'; form-action 'self'")
+            if getattr(self, 'access_expires', None) is not None:
+                self.send_header('X-Access-Expires', str(int(self.access_expires)))
             for key, value in (extra or {}).items():
                 self.send_header(key, value)
             if len(body) > 2048 and 'gzip' in self.headers.get('Accept-Encoding', ''):
@@ -186,10 +225,31 @@ def handler_for(service):
             if self.command != 'HEAD':
                 self.wfile.write(body)
 
+        def has_access(self):
+            try:
+                cookie = SimpleCookie(self.headers.get('Cookie', ''))
+                token = cookie[COOKIE].value if COOKIE in cookie else ''
+            except Exception:
+                token = ''
+            allowed, self.access_expires = permission(service.config, token)
+            return allowed
+
         def do_GET(self):
             parsed = urlsplit(self.path)
+            if parsed.path == '/enter':
+                return self.reply(200, (STATIC/'access.html').read_bytes(), 'text/html; charset=utf-8')
             if parsed.path == '/healthz':
                 return self.reply(200, {'ok': True})
+            if parsed.path in ('/access.js', '/style.css', '/montserrat.ttf', '/favicon.svg'):
+                name = parsed.path[1:]
+                kind = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+                        '.ttf': 'font/ttf', '.svg': 'image/svg+xml'}[Path(name).suffix]
+                return self.reply(200, (STATIC/name).read_bytes(), kind)
+            if not self.has_access():
+                if parsed.path == '/':
+                    return self.reply(200, (STATIC/'access.html').read_bytes(), 'text/html; charset=utf-8')
+                return self.reply(401, {'error': 'Доступ закрыт или срок ссылки истёк.', 'code': 'access_required'},
+                                  extra={'Set-Cookie': COOKIE+'=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax'})
             if parsed.path == '/readyz':
                 ok, status = service.readiness()
                 return self.reply(200 if ok else 503, status)
@@ -201,7 +261,10 @@ def handler_for(service):
                     query = parse_qs(parsed.query)
                     step = int(query['step'][0]) if 'step' in query else None
                     margin = float(query['range'][0]) if 'range' in query else None
-                    return self.reply(200, service.dataset(mode, step, margin))
+                    since=query.get('since',[None])[0]
+                    if since is not None and (len(since)!=24 or any(c not in '0123456789abcdef' for c in since)):
+                        raise ValueError('Invalid revision')
+                    return self.reply(200, service.update(mode, step, margin, since))
                 except ServiceBusy:
                     return self.reply(429, {'error': 'Слишком много запросов. Повторите через несколько секунд.'}, extra={'Retry-After': '5'})
                 except ValueError:
@@ -211,10 +274,12 @@ def handler_for(service):
                     return self.reply(503, {'error': 'Архив временно недоступен. Повторим запрос.'})
             files = {'/': ('index.html', 'text/html; charset=utf-8'),
                      '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+                     '/lightweight-charts.js': ('lightweight-charts.js', 'text/javascript; charset=utf-8'),
+                     '/updates.js': ('updates.js', 'text/javascript; charset=utf-8'),
                      '/chart.js': ('chart.js', 'text/javascript; charset=utf-8'),
                      '/style.css': ('style.css', 'text/css; charset=utf-8'),
                      '/favicon.svg': ('favicon.svg', 'image/svg+xml'),
-                     '/manrope.ttf': ('manrope.ttf', 'font/ttf')}
+                     '/montserrat.ttf': ('montserrat.ttf', 'font/ttf')}
             if parsed.path not in files:
                 return self.reply(404, {'error': 'Not found'})
             filename, content_type = files[parsed.path]
@@ -225,6 +290,24 @@ def handler_for(service):
 
         def do_POST(self):
             self.close_connection = True
+            if urlsplit(self.path).path == '/api/access' and service.config.get('web_access_restricted', False):
+                # A JSON POST from the same origin cannot be triggered by an external form.
+                origin = urlsplit(self.headers.get('Origin', ''))
+                if origin.scheme != 'https' or origin.netloc != self.headers.get('Host', ''):
+                    return self.reply(403, {'error': 'Откройте ссылку на этом сайте.'})
+                try:
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < size <= 1024 or self.headers.get('Content-Type') != 'application/json':
+                        raise ValueError()
+                    token = json.loads(self.rfile.read(size)).get('token', '')
+                    allowed, expires = permission(service.config, token)
+                except (ValueError, AttributeError):
+                    return self.reply(400, {'error': 'Некорректная ссылка.'})
+                if not allowed:
+                    return self.reply(401, {'error': 'Срок ссылки истёк или доступ отменён.'})
+                age = max(0, int(expires-time.time())) if expires is not None else 30*86400
+                cookie = f'{COOKIE}={token}; Path=/; Max-Age={age}; Secure; HttpOnly; SameSite=Lax'
+                return self.reply(200, {'ok': True}, extra={'Set-Cookie': cookie})
             return self.reply(404, {'error': 'Not found'})
     return Handler
 
@@ -243,6 +326,7 @@ def run(config):
     pid_file = root/'web.pid'
     pid_file.write_text(str(os.getpid()))
     stopping = threading.Event()
+    market_thread = start_worker(root, stopping)
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.set())
     LOG.info('Read-only web server started on loopback')
@@ -251,5 +335,7 @@ def run(config):
             server.handle_request()
     finally:
         server.server_close()
+        stopping.set()
+        market_thread.join(timeout=12)
         pid_file.unlink(missing_ok=True)
         lock.close()

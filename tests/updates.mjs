@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {mergeUpdate} from '../mtanalog/static/updates.js';
+const previous={revision:'old',columns:2,liquidity:[['old'],['keep']],known:[1,2],coverage:[1,1],cvd:[[1],[2]],candles:[{time:0},{time:120}],prices:[[0,100],[120000,110]]};
+const patch={type:'delta',base:'old',drop:1,metadata:{revision:'new',columns:2},patch:{liquidity:[[1,['new']]],known:[[1,3]],coverage:[[1,.5]],cvd:[[0,[0]],[1,[4]]]},series:{candles:{remove:[0],upsert:[{time:120,low:90},{time:240}]},prices:{remove:[0],upsert:[[240000,120]]}}};
+const merged=mergeUpdate(previous,patch);
+assert.deepEqual(merged.liquidity,[['keep'],['new']]);assert.deepEqual(merged.cvd,[[0],[4]]);
+assert.deepEqual(merged.candles,[{time:120,low:90},{time:240}]);assert.equal(previous.revision,'old');
+assert.equal(mergeUpdate(merged,{type:'unchanged',revision:'new'}),merged);
+assert.throws(()=>mergeUpdate(previous,{...patch,base:'wrong'}),/Revision mismatch/);
+console.log('Delta merge checks passed: window rotation, corrected data, upserts, immutable base and revision checks.');
