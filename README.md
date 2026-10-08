@@ -39,8 +39,8 @@ loginctl enable-linger mianalog
 Используйте путь checkout без пробелов. Откройте **SSH-сессию под mianalog** (чтобы был доступен user systemd).
 
 ```bash
-git clone https://github.com/94la/MIanalOG.git
-cd MIanalOG
+git clone https://github.com/94la/firecharts.git
+cd firecharts
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock.txt
 .venv/bin/python -m unittest discover -s tests -v
@@ -54,7 +54,7 @@ writer только один. Сбор начинается с момента у
 Под root установите web service, заменив путь своим:
 
 ```bash
-python3 /home/mianalog/MIanalOG/deploy/install-web.py --user mianalog
+python3 /home/mianalog/firecharts/deploy/install-web.py --user mianalog
 curl --fail http://127.0.0.1:8790/healthz
 ```
 
