@@ -1,4 +1,4 @@
-# MIanalOG
+# FireCharts
 
 Самостоятельно размещаемая карта наблюдаемой ликвидности **Binance BTCUSDT Spot**
 и CVD по размеру исполнений. Python + HTML/CSS/Canvas, без платных API,
