@@ -2,6 +2,7 @@ import {mergeUpdate} from './updates.js';
 import {Charts,SERIES,money,utc} from './chart.js';
 
 const $=id=>document.getElementById(id);
+let visitor;try{visitor=sessionStorage.getItem('chart-visitor')||crypto.randomUUID();sessionStorage.setItem('chart-visitor',visitor);}catch{visitor=crypto.randomUUID();}
 // Input capabilities choose the client; viewport size only controls layout.
 const clientQueries={fine:matchMedia('(pointer: fine)'),hover:matchMedia('(hover: hover)'),coarse:matchMedia('(pointer: coarse)')};
 function updateClient(){
@@ -95,7 +96,7 @@ async function load(reset=false,full=false){
   busy=true;$('refresh').disabled=true;$('apply-price').disabled=true;
   if(!data||reset)$('loading').hidden=false;
   try{
-    const response=await fetch('/api/chart?'+new URLSearchParams(params),{cache:'no-store',signal:AbortSignal.timeout(25000)});
+    const response=await fetch('/api/chart?'+new URLSearchParams(params),{cache:'no-store',headers:{'X-Chart-Visitor':visitor},signal:AbortSignal.timeout(25000)});
     if(response.status===401){window.location.replace('/');return;}
     const responseTime=Date.parse(response.headers.get('Date'));
     if(Number.isFinite(responseTime)){serverTime=responseTime;clockSync=performance.now();}
@@ -214,3 +215,21 @@ document.querySelectorAll('[data-flow]').forEach(button=>button.addEventListener
 function updateClock(){const now=serverNow();$('utc-clock').textContent=utc(now).slice(11)+' UTC';$('utc-clock').dateTime=new Date(now).toISOString();}
 updateClock();setInterval(()=>{if(!document.hidden)updateClock();},1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateClock();});
+
+let ownerMetrics=null;
+async function loadMetrics(){
+ if(document.hidden)return;
+ try{
+  const response=await fetch('/api/load');if(!response.ok){if(response.status===401||response.status===403)ownerMetrics=false;return;}
+  const m=await response.json();ownerMetrics=true;$('server-load').hidden=false;
+  $('load-visitors').textContent=m.active_visitors_5m;
+  $('load-requests').textContent=m.requests_5m;
+  $('load-latency').textContent=m.response_p95_ms+' мс';
+  $('load-cpu').textContent=m.web_cpu_pct+'%';
+  $('load-system').textContent=m.load_average[0].toFixed(2)+' / '+m.cpu_count;
+  $('load-peak').textContent=Math.max(0,...m.history.map(r=>r.requests));
+  $('load-errors').textContent=m.errors_5m+' / '+m.rejected_5m;
+  $('load-memory').textContent=m.memory.MemAvailable?(m.memory.MemAvailable/1073741824).toFixed(1)+' ГБ':'—';
+ }catch{}
+}
+loadMetrics();setInterval(()=>{if(ownerMetrics!==false)loadMetrics();},30000);

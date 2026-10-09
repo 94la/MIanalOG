@@ -1,8 +1,8 @@
 // Keep archive cohort indexes stable; the third flag hides a group from the UI.
 export const SERIES = [
-  ['Все исполнения','#a4b0aa'],['< $100','#465e57',true],['$100–1k','#e6ac58'],
-  ['$1k–10k','#55c9c0'],['$10k–100k','#bbef1f'],['$100k–1M','#b99aff'],
-  ['$1M–10M','#ff0055'],['≥ $10M','#bbef1f',true]
+  ['Все исполнения','#a4b0aa'],['< $100','#465e57',true],['$100–1k','#ffbb55'],
+  ['$1k–10k','#65dca3'],['$10k–100k','#ff5c80'],['$100k–1M','#ba8fff'],
+  ['$1M–10M','#ebc9a5'],['≥ $10M','#bbef1f',true]
 ];
 export const money = (value, digits=1) => {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -30,7 +30,7 @@ export function inspectionPoint(x,y,p,offset){
 }
 
 export const CHART_THEME={background:'#101914',bull:'#bbef1f',bear:'#ff0055',bullWick:'#d5fa77',bearWick:'#ff6296',outline:'#071410'};
-const stops=[[0,[57,73,75]],[.5,[126,146,149]],[1,[221,231,231]]];
+const stops=[[0,[16,25,20]],[.5,[126,146,149]],[1,[221,231,231]]];
 function heatColor(value){
   value=Math.max(0,Math.min(1,value));
   for(let i=1;i<stops.length;i++){

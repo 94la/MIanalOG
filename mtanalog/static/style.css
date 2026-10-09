@@ -76,7 +76,7 @@ h1{font-size:38px;letter-spacing:-1.5px;line-height:1.25;margin:10px 0 8px;font-
 input[type=range]{accent-color:#bbef1f;width:100%;height:18px;cursor:pointer;margin:0;display:block}input[type=range]:focus-visible{outline-offset:2px}
 .range-labels,.scale-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:8px}.scale-labels{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}.scale-labels strong{font-weight:700}
 .scale-section{border-top:1px solid transparent;padding-top:19px;margin-top:22px}
-.color-scale{height:8px;border-radius:4px;background:linear-gradient(90deg,#39494b,#7e9295,#dde7e7);margin-top:12px}
+.color-scale{height:8px;border-radius:4px;background:linear-gradient(90deg,#101914,#7e9295,#dde7e7);margin-top:12px}
 .small-text{font-size:11px}
 .setting-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid transparent;padding-top:13px;margin-top:15px;font-size:11px;color:var(--muted)}
 .setting-row strong{font-size:11px;font-weight:700;color:#eff8ff}
@@ -212,3 +212,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible,c
 .chart-wrap{margin-left:calc(var(--card-space) - 16px);margin-right:calc(var(--card-space) - 16px)}
 .chart-foot{padding-left:var(--card-space);padding-right:var(--card-space)}
 .cvd-legend{padding-left:var(--card-space);padding-right:var(--card-space)}
+
+.load-stats{display:grid;gap:12px;margin-top:18px}.load-stats>span{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px}.load-stats strong{color:var(--text);font-size:12px;font-variant-numeric:tabular-nums}
+
+.bottom-line{flex-wrap:wrap;row-gap:8px;line-height:1.6}.bottom-line>span{min-width:0;overflow-wrap:anywhere}.bottom-line>span:last-child{display:flex;flex-wrap:wrap;gap:4px 12px}.bottom-line .separator{margin:0}
+@media(max-width:600px){.bottom-line{align-items:flex-start;flex-direction:column}.bottom-line .separator{display:none}.cvd-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px}.cvd-legend button{white-space:nowrap;min-width:0;font-size:10px}.cvd-legend button span{flex-shrink:0}}

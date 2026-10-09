@@ -18,9 +18,10 @@ from urllib.parse import urlsplit, parse_qs
 
 from .webdata import chart_data, price_settings
 from .storage import Store
-from .access import COOKIE, permission
+from .access import COOKIE, permission, digest, read_registry
 from .market import start_worker
 from .updates import delta
+from .metrics import LoadMetrics
 
 LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent/'static'
@@ -72,6 +73,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler, workers=8):
         self.slots = threading.BoundedSemaphore(workers)
+        self.metrics = None
         super().__init__(address, handler)
 
     def get_request(self):
@@ -81,6 +83,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
     def process_request(self, request, address):
         if not self.slots.acquire(blocking=False):
+            if self.metrics:self.metrics.observe(503,0,0,rejected=True)
             self.shutdown_request(request)
             return
         try:
@@ -99,6 +102,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 class ChartService:
     def __init__(self, config):
         self.config = config
+        self.metrics = LoadMetrics()
         self.cache = {}
         self.lock = threading.Lock()
         self.compute = threading.Lock()
@@ -196,6 +200,11 @@ def handler_for(service):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
 
+        def parse_request(self):
+            result = super().parse_request()
+            self.started = time.monotonic()
+            return result
+
         def log_message(self, *_):
             pass  # Never log links, cookies or POST bodies.
 
@@ -222,8 +231,14 @@ def handler_for(service):
                 self.send_header('Vary', 'Accept-Encoding')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
-            if self.command != 'HEAD':
-                self.wfile.write(body)
+            try:
+                if self.command != 'HEAD':self.wfile.write(body)
+            finally:
+                path=urlsplit(self.path).path
+                if path!='/api/load':
+                    client=self.headers.get('X-Chart-Visitor') if path=='/api/chart' and status==200 else None
+                    service.metrics.observe(status,(time.monotonic()-self.started)*1000,len(body),client)
+
 
         def has_access(self):
             try:
@@ -272,6 +287,14 @@ def handler_for(service):
                 except Exception:
                     LOG.warning('Chart snapshot unavailable')
                     return self.reply(503, {'error': 'Архив временно недоступен. Повторим запрос.'})
+            if parsed.path == '/api/load':
+                cookie=SimpleCookie(self.headers.get('Cookie',''))
+                token=cookie[COOKIE].value if COOKIE in cookie else ''
+                owner=read_registry(service.config).get('owner_hash','')
+                if not owner or len(token)!=43 or not secrets.compare_digest(owner,digest(token)):
+                    return self.reply(403,{'error':'Owner access required'})
+                result=service.metrics.snapshot();result['collector']=service.readiness()[1]
+                return self.reply(200,result)
             files = {'/': ('index.html', 'text/html; charset=utf-8'),
                      '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                      '/lightweight-charts.js': ('lightweight-charts.js', 'text/javascript; charset=utf-8'),
@@ -321,12 +344,15 @@ def run(config):
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     service = ChartService(config)
     server = BoundedHTTPServer(('127.0.0.1', config.get('web_port', 8790)), handler_for(service))
+    server.metrics = service.metrics
     server.daemon_threads = True
     server.timeout = 1
     pid_file = root/'web.pid'
     pid_file.write_text(str(os.getpid()))
     stopping = threading.Event()
     market_thread = start_worker(root, stopping)
+    metrics_thread=threading.Thread(target=service.metrics.persist,args=(root,stopping,service.readiness),daemon=True)
+    metrics_thread.start()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.set())
     LOG.info('Read-only web server started on loopback')

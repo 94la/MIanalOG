@@ -74,6 +74,10 @@ class AccessTests(unittest.TestCase):
                         continue
                     with self.assertRaises(urllib.error.HTTPError) as error:request(route)
                     self.assertEqual(error.exception.code,401)
+                with self.assertRaises(urllib.error.HTTPError) as error:request('/api/load',cookie=token(guest))
+                self.assertEqual(error.exception.code,403)
+                with request('/api/load',cookie=token(owner)) as r:
+                    self.assertIn('history',json.load(r))
                 body=json.dumps({'token':token(guest)}).encode()
                 with self.assertRaises(urllib.error.HTTPError) as error:request('/api/access',body=body,origin='https://attacker.example')
                 self.assertEqual(error.exception.code,403)

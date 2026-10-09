@@ -39,7 +39,7 @@
           <div id="cvd-legend" class="cvd-legend" role="group" aria-label="Видимые группы CVD"></div>
         </section>
         <div id="data-error" class="error" role="alert" hidden></div>
-        <div class="bottom-line"><span id="updated-at">—</span><span>Время на графике — UTC <span class="separator">·</span> обновление каждые 15 сек.</span></div>
+        <div class="bottom-line"><span id="updated-at">—</span><span><span>Время на графике — UTC</span><span class="separator">·</span><span>Обновление каждые 15 сек.</span></span></div>
       </div>
 
       <aside class="sidebar">
@@ -88,7 +88,12 @@
             <li>Кнопка сброса ↺ — вернуть полное окно.</li>
           </ul>
           <p class="helper">Шаг: 25–2000 USDT, кратно 25. Диапазон: ±0.5–20%. Введи значения и нажми «Применить». Чтобы расширить карту за пределы загруженной области, увеличь настройку диапазона.</p>
-        </details></div>
+        </details>
+        <details id="server-load" class="info-card glass" hidden><summary>Нагрузка сайта <span>+</span></summary><div class="load-stats">
+          <span>Посетители за 5 мин<strong id="load-visitors">—</strong></span><span>Запросы за 5 мин<strong id="load-requests">—</strong></span>
+          <span>Ответ p95, худшая минута<strong id="load-latency">—</strong></span><span>CPU веб-процесса<strong id="load-cpu">—</strong></span>
+          <span>Ошибки / отказы за 5 мин<strong id="load-errors">—</strong></span><span>Нагрузка VPS / ядра<strong id="load-system">—</strong></span><span>Пик запросов/мин за сутки<strong id="load-peak">—</strong></span><span>Свободная RAM VPS<strong id="load-memory">—</strong></span>
+        </div><p class="helper small-text">Только для владельца. Посетители — приблизительно активные вкладки. Статистика обновляется каждые 30 секунд.</p></details></div>
       </aside>
     </section>
   </main>
